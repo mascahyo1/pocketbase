@@ -212,7 +212,7 @@
         };
 
         document.addEventListener('DOMContentLoaded', function() {
-            // setDefaultDateFilter(); // Disabled untuk debug
+            setDefaultDateFilter();
             loadCategories();
             loadPosts();
             subscribeToPosts();
