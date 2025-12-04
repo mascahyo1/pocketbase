@@ -211,9 +211,9 @@
             category: ''
         };
 
-        document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', async function() {
             setDefaultDateFilter();
-            loadCategories();
+            await loadCategories();
             loadPosts();
             subscribeToPosts();
         });
