@@ -1,0 +1,10 @@
+table post_categories
+-name
+-description
+table posts
+-title
+-category_id
+-start_time
+-end_time
+-status(draft, publish)
+-description
