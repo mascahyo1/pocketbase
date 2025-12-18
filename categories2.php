@@ -13,6 +13,17 @@
             <p class="text-gray-600">Kelola kategori posting dengan PocketBase tanpa SDK</p>
         </div>
 
+        <!-- Connection Status Indicator -->
+        <div id="connectionStatus" class="mb-6 p-4 rounded-lg border flex items-center justify-between bg-gray-50">
+            <div class="flex items-center">
+                <div id="statusIndicator" class="w-3 h-3 rounded-full bg-gray-400 mr-3"></div>
+                <span id="statusText" class="text-sm font-medium text-gray-600">Menghubungkan...</span>
+            </div>
+            <button id="reconnectBtn" onclick="manualReconnect()" class="hidden bg-orange-600 hover:bg-orange-700 text-white font-semibold px-4 py-2 rounded-lg transition duration-200 text-sm">
+                🔄 Reconnect
+            </button>
+        </div>
+
         <div id="alertMessage" class="hidden mb-6 p-4 rounded-lg">
             <span id="alertText"></span>
         </div>
@@ -114,55 +125,159 @@
         const BASE_URL = 'http://127.0.0.1:8090';
         let currentPage = 1;
         const perPage = 10;
+        let eventSource = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        const reconnectDelay = 3000; // 3 detik
+        let isConnected = false;
+        let isReconnecting = false;
 
         document.addEventListener('DOMContentLoaded', function() {
             loadCategories();
             setupRealtimeListener();
         });
 
-        // Setup Server-Sent Events (SSE) untuk realtime
-        async function setupRealtimeListener() {
-            const eventSource = new EventSource(`${BASE_URL}/api/realtime`);
+        // Update UI status koneksi
+        function updateConnectionStatus(status) {
+            const indicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+            const reconnectBtn = document.getElementById('reconnectBtn');
             
-            eventSource.addEventListener('PB_CONNECT', async function(e) {
-                const data = JSON.parse(e.data);
-                console.log('Connected to PocketBase realtime, clientId:', data.clientId);
-                
-                // Subscribe to post_categories collection
-                try {
-                    const response = await fetch(`${BASE_URL}/api/realtime`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            clientId: data.clientId,
-                            subscriptions: ['post_categories']
-                        })
-                    });
-                    
-                    if (response.ok) {
-                        console.log('Successfully subscribed to post_categories');
-                    } else {
-                        console.error('Failed to subscribe:', await response.text());
-                    }
-                } catch (error) {
-                    console.error('Error subscribing:', error);
-                }
-            });
-            
-            eventSource.addEventListener('post_categories', function(e) {
-                console.log('event', e);
-                console.log('Received post_categories event:', e.data);
-                const data = JSON.parse(e.data);
-                console.log('Action:', data.action, 'Record:', data.record);
-                loadCategories(currentPage);
-            });
-            
-            eventSource.onerror = function(error) {
-                console.error('SSE Error:', error);
-            };
+            if (status === 'connected') {
+                indicator.className = 'w-3 h-3 rounded-full bg-green-500 mr-3 animate-pulse';
+                statusText.textContent = 'Realtime Connected';
+                statusText.className = 'text-sm font-medium text-green-600';
+                reconnectBtn.classList.add('hidden');
+            } else if (status === 'disconnected') {
+                indicator.className = 'w-3 h-3 rounded-full bg-red-500 mr-3';
+                statusText.textContent = `Realtime Disconnected (${reconnectAttempts}/${maxReconnectAttempts} attempts)`;
+                statusText.className = 'text-sm font-medium text-red-600';
+                reconnectBtn.classList.remove('hidden');
+            } else if (status === 'connecting') {
+                indicator.className = 'w-3 h-3 rounded-full bg-yellow-500 mr-3 animate-pulse';
+                const attemptText = reconnectAttempts > 0 ? ` (attempt ${reconnectAttempts}/${maxReconnectAttempts})` : '';
+                statusText.textContent = `Connecting...${attemptText}`;
+                statusText.className = 'text-sm font-medium text-yellow-600';
+                reconnectBtn.classList.add('hidden');
+            }
         }
+
+        // Manual reconnect
+        function manualReconnect() {
+            if (isReconnecting) return;
+            
+            reconnectAttempts = 0; // Reset counter
+            isReconnecting = true;
+            updateConnectionStatus('connecting');
+            
+            setupRealtimeListener();
+            
+            setTimeout(() => {
+                isReconnecting = false;
+            }, 1000);
+        }
+
+        // Setup Server-Sent Events (SSE) untuk realtime dengan auto-reconnect
+        async function setupRealtimeListener() {
+            // Tutup koneksi lama jika ada
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+
+            updateConnectionStatus('connecting');
+
+            try {
+                eventSource = new EventSource(`${BASE_URL}/api/realtime`);
+                
+                eventSource.addEventListener('PB_CONNECT', async function(e) {
+                    const data = JSON.parse(e.data);
+                    console.log('✅ Connected to PocketBase realtime, clientId:', data.clientId);
+                    isConnected = true;
+                    reconnectAttempts = 0; // Reset counter saat sukses koneksi
+                    updateConnectionStatus('connected');
+                    
+                    // Subscribe to post_categories collection
+                    try {
+                        const response = await fetch(`${BASE_URL}/api/realtime`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                clientId: data.clientId,
+                                subscriptions: ['post_categories']
+                            })
+                        });
+                        
+                        if (response.ok) {
+                            console.log('✅ Successfully subscribed to post_categories');
+                        } else {
+                            console.error('❌ Failed to subscribe:', await response.text());
+                        }
+                    } catch (error) {
+                        console.error('❌ Error subscribing:', error);
+                    }
+                });
+                
+                eventSource.addEventListener('post_categories', function(e) {
+                    console.log('📨 Received post_categories event:', e.data);
+                    const data = JSON.parse(e.data);
+                    console.log('Action:', data.action, 'Record:', data.record);
+                    loadCategories(currentPage);
+                });
+                
+                // Handle disconnect dan auto-reconnect
+                eventSource.onerror = function(error) {
+                    console.error('❌ SSE Connection Error:', error);
+                    isConnected = false;
+                    updateConnectionStatus('disconnected');
+                    
+                    if (eventSource) {
+                        eventSource.close();
+                        eventSource = null;
+                    }
+                    
+                    // Auto-reconnect dengan delay
+                    if (reconnectAttempts < maxReconnectAttempts) {
+                        reconnectAttempts++;
+                        console.log(`🔄 Attempting to reconnect... (${reconnectAttempts}/${maxReconnectAttempts})`);
+                        updateConnectionStatus('connecting');
+                        
+                        setTimeout(() => {
+                            setupRealtimeListener();
+                        }, reconnectDelay);
+                    } else {
+                        console.error('❌ Max reconnection attempts reached. Use manual reconnect button.');
+                        showAlert('Koneksi realtime terputus. Klik tombol Reconnect untuk mencoba lagi.', 'error');
+                        updateConnectionStatus('disconnected');
+                    }
+                };
+
+                // Handle saat koneksi dibuka
+                eventSource.onopen = function() {
+                    console.log('🔌 EventSource connection opened');
+                };
+                
+            } catch (error) {
+                console.error('❌ Error setting up realtime listener:', error);
+                
+                // Retry jika setup gagal
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    setTimeout(() => {
+                        setupRealtimeListener();
+                    }, reconnectDelay);
+                }
+            }
+        }
+
+        // Cleanup saat halaman ditutup
+        window.addEventListener('beforeunload', function() {
+            if (eventSource) {
+                eventSource.close();
+            }
+        });
 
         async function loadCategories(page = 1) {
             try {
